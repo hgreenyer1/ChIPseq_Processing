@@ -1,0 +1,55 @@
+report_comment: >
+  ChIP-seq pipeline (nf-core/chipseq layout, ENCODE filtering, QC and replicate
+  reproducibility). Library IDs are &lt;sample&gt;_REP&lt;replicate&gt;; sequencing
+  runs of a library are &lt;library&gt;_T&lt;n&gt;.
+
+run_modules:
+  - custom_content
+  - fastqc
+  - cutadapt
+  - bowtie2
+  - samtools
+  - picard
+  - phantompeakqualtools
+  - deeptools
+  - macs2
+  - featureCounts
+
+module_order:
+  - fastqc:
+      name: "FastQC (raw)"
+      anchor: "fastqc_raw"
+      path_filters:
+        - "*/fastqc/raw/*"
+  - cutadapt:
+      name: "Trim Galore"
+  - fastqc:
+      name: "FastQC (trimmed)"
+      anchor: "fastqc_trimmed"
+      path_filters:
+        - "*/trimgalore/fastqc/*"
+  - bowtie2
+  - samtools
+  - picard
+  - phantompeakqualtools
+  - deeptools
+  - macs2
+  - featureCounts
+
+custom_content:
+  order:
+    - chipseq_library_qc
+    - chipseq_reproducibility
+
+extra_fn_clean_exts:
+  - ".filt.dedup"
+  - ".filt"
+  - ".merged"
+  - ".bowtie2"
+  - "_trimmed"
+  - "_val_1"
+  - "_val_2"
+  - ".plotFingerprint"
+  - ".spp"
+
+max_table_rows: 2000

@@ -1,0 +1,26 @@
+# Conda environment with every tool the pipeline calls.
+#   conda env create -f environment.yml      (or mamba / micromamba)
+#   conda activate chipseq
+# Then set setup_env() in conf/chipseq.config to activate it inside each job.
+name: chipseq
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.10
+  - fastqc=0.12.1
+  - trim-galore=0.6.10
+  - bowtie2=2.5.4
+  - samtools>=1.15
+  - picard=3.1.1
+  - bedtools=2.31.1
+  - macs3=3.0.4
+  - idr=2.0.4.2
+  - deeptools=3.5.5
+  - phantompeakqualtools=1.2.2
+  - subread=2.0.6
+  - ucsc-bedgraphtobigwig
+  - ucsc-bedclip
+  - multiqc=1.21
+  - openssl
+  - pigz
