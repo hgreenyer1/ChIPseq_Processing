@@ -1,0 +1,14 @@
+sample,fastq_1,fastq_2,replicate,antibody,control,control_replicate,peak_type
+CTCF_WT,/users/h/g/hgreenye/data/chipseq/fastq/CTCF_WT_R1_L001_1.fastq.gz,/users/h/g/hgreenye/data/chipseq/fastq/CTCF_WT_R1_L001_2.fastq.gz,1,CTCF,INPUT_WT,1,narrow
+CTCF_WT,/users/h/g/hgreenye/data/chipseq/fastq/CTCF_WT_R1_L002_1.fastq.gz,/users/h/g/hgreenye/data/chipseq/fastq/CTCF_WT_R1_L002_2.fastq.gz,1,CTCF,INPUT_WT,1,narrow
+CTCF_WT,/users/h/g/hgreenye/data/chipseq/fastq/CTCF_WT_R2_1.fastq.gz,/users/h/g/hgreenye/data/chipseq/fastq/CTCF_WT_R2_2.fastq.gz,2,CTCF,INPUT_WT,2,narrow
+CTCF_KO,/users/h/g/hgreenye/data/chipseq/fastq/CTCF_KO_R1_1.fastq.gz,/users/h/g/hgreenye/data/chipseq/fastq/CTCF_KO_R1_2.fastq.gz,1,CTCF,INPUT_KO,1,narrow
+CTCF_KO,/users/h/g/hgreenye/data/chipseq/fastq/CTCF_KO_R2_1.fastq.gz,/users/h/g/hgreenye/data/chipseq/fastq/CTCF_KO_R2_2.fastq.gz,2,CTCF,INPUT_KO,2,narrow
+H3K27me3_WT,/users/h/g/hgreenye/data/chipseq/fastq/H3K27me3_WT_R1_1.fastq.gz,/users/h/g/hgreenye/data/chipseq/fastq/H3K27me3_WT_R1_2.fastq.gz,1,H3K27me3,INPUT_WT,1,broad
+H3K27me3_WT,/users/h/g/hgreenye/data/chipseq/fastq/H3K27me3_WT_R2_1.fastq.gz,/users/h/g/hgreenye/data/chipseq/fastq/H3K27me3_WT_R2_2.fastq.gz,2,H3K27me3,INPUT_WT,2,broad
+H3K27me3_KO,/users/h/g/hgreenye/data/chipseq/fastq/H3K27me3_KO_R1_1.fastq.gz,/users/h/g/hgreenye/data/chipseq/fastq/H3K27me3_KO_R1_2.fastq.gz,1,H3K27me3,INPUT_KO,1,broad
+H3K27me3_KO,/users/h/g/hgreenye/data/chipseq/fastq/H3K27me3_KO_R2_1.fastq.gz,/users/h/g/hgreenye/data/chipseq/fastq/H3K27me3_KO_R2_2.fastq.gz,2,H3K27me3,INPUT_KO,2,broad
+INPUT_WT,/users/h/g/hgreenye/data/chipseq/fastq/INPUT_WT_R1_1.fastq.gz,/users/h/g/hgreenye/data/chipseq/fastq/INPUT_WT_R1_2.fastq.gz,1,,,,
+INPUT_WT,/users/h/g/hgreenye/data/chipseq/fastq/INPUT_WT_R2_1.fastq.gz,/users/h/g/hgreenye/data/chipseq/fastq/INPUT_WT_R2_2.fastq.gz,2,,,,
+INPUT_KO,/users/h/g/hgreenye/data/chipseq/fastq/INPUT_KO_R1_1.fastq.gz,/users/h/g/hgreenye/data/chipseq/fastq/INPUT_KO_R1_2.fastq.gz,1,,,,
+INPUT_KO,/users/h/g/hgreenye/data/chipseq/fastq/INPUT_KO_R2_1.fastq.gz,/users/h/g/hgreenye/data/chipseq/fastq/INPUT_KO_R2_2.fastq.gz,2,,,,
