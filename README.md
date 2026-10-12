@@ -8,7 +8,7 @@ steps and a similar output layout. Filtering, QC metrics, signal tracks and
 replicate reproducibility follow the
 [ENCODE ChIP-seq pipeline](https://github.com/ENCODE-DCC/chip-seq-pipeline2)
 and the [ENCODE standards](https://www.encodeproject.org/chip-seq/).
-Defaults are set for the UVM VACC (`bluemoon` partition, hg38).
+Defaults are set for the UVM VACC 
 
 ## Workflow
 
