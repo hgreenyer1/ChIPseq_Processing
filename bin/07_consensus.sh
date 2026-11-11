@@ -5,6 +5,8 @@
 # differential binding (e.g. DESeq2).
 #
 # usage: 07_consensus.sh <antibody> <narrow|broad> <all_paired 0|1> <ip_library> [ip_library ...]
+#   all_paired=0 means at least one library is single-end; read types are then
+#   detected per library
 source "${CHIPSEQ_PIPELINE_DIR}/bin/common.sh"
 
 ANTIBODY=$1
@@ -48,17 +50,49 @@ awk -v libs="$libs_csv" 'BEGIN{
 # featureCounts on the consensus peaks
 awk 'BEGIN{OFS="\t"; print "GeneID","Chr","Start","End","Strand"} {print $1":"$2+1"-"$3,$1,$2+1,$3,"+"}' \
     "$prefix.bed" > "$prefix.saf"
-pe_args=()
-if [[ $ALL_PAIRED == 1 ]]; then
-    # subread >= 2.0.2 needs --countReadPairs to count fragments
-    fc_help=$(featureCounts 2>&1 || true)
-    if [[ $fc_help == *--countReadPairs* ]]; then
-        pe_args=(-p --countReadPairs)
+# subread >= 2.0.2 needs --countReadPairs to count fragments
+pe_args=(-p)
+fc_help=$(featureCounts 2>&1 || true)
+[[ $fc_help == *--countReadPairs* ]] && pe_args+=(--countReadPairs)
+
+# featureCounts cannot mix single-end and paired-end BAMs in one run: count
+# each kind separately and join the columns back in library order
+is_paired_bam() {
+    local fs=$OUTDIR/bowtie2/merged_library/qc/$1.filt.dedup.flagstat n
+    if [[ -s $fs ]]; then
+        n=$(awk '/paired in sequencing/ {print $1}' "$fs")
     else
-        pe_args=(-p)
+        n=$(samtools view -c -f 1 "$(lib_bam "$1")")
     fi
+    (( ${n:-0} > 0 ))
+}
+pe_bams=() se_bams=()
+for lib in "${LIBS[@]}"; do
+    if [[ $ALL_PAIRED == 1 ]] || is_paired_bam "$lib"; then
+        pe_bams+=("$(lib_bam "$lib")")
+    else
+        se_bams+=("$(lib_bam "$lib")")
+    fi
+done
+fc_common=(-F SAF -O --fracOverlap 0.2 -T "$CPUS" --tmpDir "$STEP_TMP" -a "$prefix.saf")
+
+if (( ${#se_bams[@]} == 0 )); then
+    featureCounts "${fc_common[@]}" "${pe_args[@]}" -o "$prefix.featureCounts.txt" "${pe_bams[@]}"
+elif (( ${#pe_bams[@]} == 0 )); then
+    featureCounts "${fc_common[@]}" -o "$prefix.featureCounts.txt" "${se_bams[@]}"
+else
+    log "Counting ${#pe_bams[@]} paired-end and ${#se_bams[@]} single-end libraries separately"
+    featureCounts "${fc_common[@]}" "${pe_args[@]}" -o "$prefix.pe.featureCounts.txt" "${pe_bams[@]}"
+    featureCounts "${fc_common[@]}" -o "$prefix.se.featureCounts.txt" "${se_bams[@]}"
+    order=$(IFS=,; echo "${bams[*]}")
+    paste "$prefix.pe.featureCounts.txt" "$prefix.se.featureCounts.txt" | awk -F'\t' -v order="$order" '
+        BEGIN { OFS="\t"; n=split(order, o, ",") }
+        NR==1 { print "# featureCounts: paired-end libraries counted as fragments, single-end as reads"; next }
+        NR==2 { for (i=1; i<=NF; i++) if (!($i in col)) col[$i]=i }
+        { out=$1; for (i=2; i<=6; i++) out=out OFS $i
+          for (k=1; k<=n; k++) out=out OFS $(col[o[k]])
+          print out }' > "$prefix.featureCounts.txt"
+    rm -f "$prefix.pe.featureCounts.txt" "$prefix.se.featureCounts.txt"
 fi
-featureCounts -F SAF -O --fracOverlap 0.2 -T "$CPUS" "${pe_args[@]}" --tmpDir "$STEP_TMP" \
-    -a "$prefix.saf" -o "$prefix.featureCounts.txt" "${bams[@]}"
 
 finish_step

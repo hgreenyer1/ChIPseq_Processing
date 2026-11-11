@@ -10,6 +10,8 @@
 #                  library complexity) -> bamqc (SPP cross-correlation, bigWig)
 #   per IP lib   : peaks (MACS2 main + relaxed calls, FRiP, signal tracks,
 #                  fingerprint)                  [waits for its control too]
+#   per sample   : merge (pooled replicate BAM + bigWig; samples with >= 2
+#                  replicates) -> mpeaks (peaks on the merged IP vs merged input)
 #   per sample   : repro (IDR / naive overlap across replicates, pseudoreps)
 #   per antibody : consensus (merged peaks + featureCounts)
 #   once         : multiqc (runs after everything, even if some jobs failed)
@@ -218,6 +220,15 @@ for lib in "${LIBS[@]}"; do
 done
 (( ${#IP_LIBS[@]} > 0 )) || err "no IP libraries (rows with an antibody) in the samplesheet"
 
+# All samples (IP and control) with their libraries, for merged replicates
+declare -A ALL_SAMPLE_LIBS
+ALL_SAMPLES=()
+for lib in "${LIBS[@]}"; do
+    s=${LIB_SAMPLE[$lib]}
+    [[ -z ${ALL_SAMPLE_LIBS[$s]:-} ]] && ALL_SAMPLES+=("$s")
+    ALL_SAMPLE_LIBS[$s]+="${ALL_SAMPLE_LIBS[$s]:+ }$lib"
+done
+
 (( ERRORS == 0 )) || die "$ERRORS problem(s) found in the samplesheet / config, nothing submitted"
 
 echo "Samplesheet OK: ${#RUNS[@]} runs, ${#LIBS[@]} libraries (${#IP_LIBS[@]} IP), ${#SAMPLES[@]} IP samples, ${#ANTIBODIES[@]} antibodies"
@@ -327,6 +338,47 @@ for lib in "${IP_LIBS[@]}"; do
     submit peaks "$lib" PEAKS afterok "$deps" 05_call_peaks.sh "$lib" "$ctrl" "${LIB_PAIRED[$lib]}" "${LIB_PTYPE[$lib]}"
     PEAKS_JOB[$lib]=$JOBID
 done
+
+if is_true "$MERGE_REPLICATES"; then
+    echo "Submitting merged replicates"
+    declare -A MERGE_JOB MERGED_PAIRED
+    for s in "${ALL_SAMPLES[@]}"; do
+        read -ra libs <<< "${ALL_SAMPLE_LIBS[$s]}"
+        (( ${#libs[@]} >= 2 )) || continue
+        deps="" pe=1
+        for lib in "${libs[@]}"; do
+            deps+=" ${FILTER_JOB[$lib]} ${BAMQC_JOB[$lib]}"
+            [[ ${LIB_PAIRED[$lib]} == 1 ]] || pe=0
+        done
+        submit merge "$s" MERGE afterok "$deps" 09_merge_replicates.sh "$s" "$pe" "${libs[@]}"
+        MERGE_JOB[$s]=$JOBID
+        MERGED_PAIRED[$s]=$pe
+    done
+
+    for s in "${SAMPLES[@]}"; do
+        [[ -n ${MERGED_PAIRED[$s]:-} ]] || continue
+        # Control for the merged IP: the merged control sample when the
+        # replicates' controls are exactly its replicates, otherwise the
+        # control libraries themselves (pooled by the peak job if several)
+        mapfile -t ctrls < <(for lib in ${SAMPLE_LIBS[$s]}; do echo "${LIB_CTRL[$lib]}"; done | grep -vx none | sort -u)
+        deps="${MERGE_JOB[$s]}"
+        if (( ${#ctrls[@]} == 0 )); then
+            ctrl_spec="none"
+        else
+            cs=${LIB_SAMPLE[${ctrls[0]}]}
+            all_cs=$(printf '%s\n' ${ALL_SAMPLE_LIBS[$cs]} | sort | paste -sd' ')
+            if [[ -n ${MERGE_JOB[$cs]+x} && $all_cs == "$(printf '%s\n' "${ctrls[@]}" | paste -sd' ')" ]]; then
+                ctrl_spec="merged:$cs"
+                deps+=" ${MERGE_JOB[$cs]}"
+            else
+                ctrl_spec=$(IFS=,; echo "${ctrls[*]}")
+                for c in "${ctrls[@]}"; do deps+=" ${FILTER_JOB[$c]}"; done
+            fi
+        fi
+        submit mpeaks "$s" PEAKS afterok "$deps" 05_call_peaks.sh "$s" "$ctrl_spec" \
+            "${MERGED_PAIRED[$s]}" "${SAMPLE_PTYPE[$s]}" replicate
+    done
+fi
 
 if is_true "$RUN_REPRODUCIBILITY"; then
     echo "Submitting replicate reproducibility"

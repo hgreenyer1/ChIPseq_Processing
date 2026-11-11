@@ -1,36 +1,77 @@
 #!/usr/bin/env bash
-# Step 5 (per IP library):
+# Step 5 (per IP library, and per IP sample for merged replicates):
 #   - main MACS2 call (nf-core): narrowPeak (q < MACS_QVAL) or broadPeak
 #     (--broad-cutoff MACS_BROAD_CUTOFF), blacklist filtered, FRiP
 #   - relaxed MACS2 call (ENCODE, p < RELAXED_PVAL, top RELAXED_NPEAKS) used for
 #     replicate reproducibility, plus fold-enrichment and -log10(p) bigWigs
 #   - deepTools plotFingerprint of IP vs control
 #
-# usage: 05_call_peaks.sh <ip_library_id> <control_library_id|none> <paired 0|1> <narrow|broad>
+# usage: 05_call_peaks.sh <id> <control> <paired 0|1> <narrow|broad> [library|replicate]
+#   library   (default): <id> is a library, <control> a control library or "none"
+#   replicate          : <id> is a sample whose replicates were merged by
+#                        09_merge_replicates.sh; <control> is "none",
+#                        "merged:<control_sample>" or a comma separated list of
+#                        control libraries (pooled here)
 source "${CHIPSEQ_PIPELINE_DIR}/bin/common.sh"
 
-LIB_ID=$1
-CTRL_ID=$2
+ID=$1
+CTRL_SPEC=$2
 PAIRED=$3
 PEAK_TYPE=$4
-init_step peaks "$LIB_ID"
+LEVEL=${5:-library}
 
-IP_BAM=$(lib_bam "$LIB_ID")
+if [[ $LEVEL == "replicate" ]]; then
+    init_step mpeaks "$ID"
+    IP_BAM=$(merged_bam "$ID")
+    FRAGLEN=$(merged_fraglen "$ID")
+    BASE=$OUTDIR/macs2/merged_replicate
+    FP_OUT=$OUTDIR/deeptools/plotFingerprint/merged_replicate
+    METRICS_FILE=$METRICS_DIR/merged/$ID/2_peaks.tsv
+else
+    init_step peaks "$ID"
+    IP_BAM=$(lib_bam "$ID")
+    FRAGLEN=$(lib_fraglen "$ID")
+    BASE=$OUTDIR/macs2
+    FP_OUT=$OUTDIR/deeptools/plotFingerprint
+    METRICS_FILE=$METRICS_DIR/libraries/$ID/3_peaks.tsv
+fi
 [[ -s $IP_BAM ]] || die "missing IP BAM $IP_BAM"
-CTRL_BAM=""
+
+# ---- control ---------------------------------------------------------------------
+CTRL_BAM="" CTRL_LABEL="none"
+case $CTRL_SPEC in
+    none) ;;
+    merged:*)
+        CTRL_LABEL=${CTRL_SPEC#merged:}
+        CTRL_BAM=$(merged_bam "$CTRL_LABEL")
+        ;;
+    *,*)
+        # controls of the replicates span several samples: pool them here
+        IFS=, read -ra ctrl_libs <<< "$CTRL_SPEC"
+        ctrl_bams=()
+        for c in "${ctrl_libs[@]}"; do ctrl_bams+=("$(lib_bam "$c")"); done
+        log "Pooling controls ${ctrl_libs[*]}"
+        CTRL_BAM=$STEP_TMP/pooled_control.bam
+        samtools merge -@ "$CPUS" -f "$CTRL_BAM" "${ctrl_bams[@]}"
+        samtools index "$CTRL_BAM"
+        CTRL_LABEL="pooled_control"
+        ;;
+    *)
+        CTRL_LABEL=$CTRL_SPEC
+        CTRL_BAM=$(lib_bam "$CTRL_SPEC")
+        ;;
+esac
 ctrl_args=()
-if [[ $CTRL_ID != "none" ]]; then
-    CTRL_BAM=$(lib_bam "$CTRL_ID")
+if [[ -n $CTRL_BAM ]]; then
     [[ -s $CTRL_BAM ]] || die "missing control BAM $CTRL_BAM"
     ctrl_args=(-c "$CTRL_BAM")
 fi
 
-FRAGLEN=$(lib_fraglen "$LIB_ID")
 MACS_IN=$(macs_input_args "$PAIRED" "$FRAGLEN")
-log "MACS2 input: $MACS_IN"
+log "MACS2 input: $MACS_IN, control: $CTRL_LABEL"
 
 # ---- main peak call ------------------------------------------------------------
-MAIN_OUT=$OUTDIR/macs2/$PEAK_TYPE
+MAIN_OUT=$BASE/$PEAK_TYPE
 mkdir -p "$MAIN_OUT/qc"
 if [[ $PEAK_TYPE == "broad" ]]; then
     type_args=(--broad --broad-cutoff "$MACS_BROAD_CUTOFF")
@@ -40,10 +81,10 @@ fi
 log "MACS2 main ${PEAK_TYPE} peak call"
 # shellcheck disable=SC2086
 "$MACS_CMD" callpeak -t "$IP_BAM" "${ctrl_args[@]}" $MACS_IN -g "$MACS_GSIZE" \
-    -n "$LIB_ID" --outdir "$MAIN_OUT" --tempdir "$STEP_TMP" --keep-dup all \
+    -n "$ID" --outdir "$MAIN_OUT" --tempdir "$STEP_TMP" --keep-dup all \
     "${type_args[@]}" $MACS_EXTRA_ARGS
-raw_peaks=$MAIN_OUT/${LIB_ID}_peaks.${PEAK_TYPE}Peak
-peaks=$(main_peaks "$LIB_ID" "$PEAK_TYPE")
+raw_peaks=$MAIN_OUT/${ID}_peaks.${PEAK_TYPE}Peak
+peaks=$MAIN_OUT/${ID}_peaks.bfilt.${PEAK_TYPE}Peak
 blacklist_filter "$raw_peaks" "$peaks"
 n_peaks=$(wc -l < "$peaks")
 log "$n_peaks ${PEAK_TYPE} peaks after blacklist filtering"
@@ -57,34 +98,33 @@ else
     in_peaks=0
 fi
 frip=$(awk -v a="$in_peaks" -v b="$total" 'BEGIN{printf "%.4f", (b>0)?a/b:0}')
-printf 'library\treads\treads_in_peaks\tFRiP\n%s\t%s\t%s\t%s\n' "$LIB_ID" "$total" "$in_peaks" "$frip" \
-    > "$MAIN_OUT/qc/$LIB_ID.FRiP.txt"
+printf 'id\treads\treads_in_peaks\tFRiP\n%s\t%s\t%s\t%s\n' "$ID" "$total" "$in_peaks" "$frip" \
+    > "$MAIN_OUT/qc/$ID.FRiP.txt"
 
 # ---- relaxed peaks + signal tracks (ENCODE) --------------------------------------
-REL_OUT=$OUTDIR/macs2/relaxed/$LIB_ID
+REL_OUT=$BASE/relaxed/$ID
 log "MACS2 relaxed call (p < $RELAXED_PVAL)"
-call_relaxed_peaks "$IP_BAM" "$CTRL_BAM" "$LIB_ID" "$REL_OUT" "$PAIRED" "$FRAGLEN" bdg
-n_relaxed=$(wc -l < "$(relaxed_peaks "$LIB_ID")")
+call_relaxed_peaks "$IP_BAM" "$CTRL_BAM" "$ID" "$REL_OUT" "$PAIRED" "$FRAGLEN" bdg
+n_relaxed=$(wc -l < "$REL_OUT/$ID.relaxed.narrowPeak")
 
-SIG_OUT=$OUTDIR/macs2/signal
+SIG_OUT=$BASE/signal
 mkdir -p "$SIG_OUT"
-treat_bdg=$REL_OUT/${LIB_ID}_treat_pileup.bdg
-ctrl_bdg=$REL_OUT/${LIB_ID}_control_lambda.bdg
+treat_bdg=$REL_OUT/${ID}_treat_pileup.bdg
+ctrl_bdg=$REL_OUT/${ID}_control_lambda.bdg
 log "Fold-enrichment and p-value signal tracks"
-"$MACS_CMD" bdgcmp -t "$treat_bdg" -c "$ctrl_bdg" -m FE --outdir "$STEP_TMP" --o-prefix "$LIB_ID"
-bdg_to_bigwig "$STEP_TMP/${LIB_ID}_FE.bdg" "$SIG_OUT/$LIB_ID.fc_signal.bigWig"
-rm -f "$STEP_TMP/${LIB_ID}_FE.bdg"
+"$MACS_CMD" bdgcmp -t "$treat_bdg" -c "$ctrl_bdg" -m FE --outdir "$STEP_TMP" --o-prefix "$ID"
+bdg_to_bigwig "$STEP_TMP/${ID}_FE.bdg" "$SIG_OUT/$ID.fc_signal.bigWig"
+rm -f "$STEP_TMP/${ID}_FE.bdg"
 # ENCODE: scale the p-value track by the smaller library (in millions of reads)
 ctrl_total=$total
 [[ -n $CTRL_BAM ]] && ctrl_total=$(samtools view -c -F 4 "$CTRL_BAM")
 sval=$(awk -v a="$total" -v b="$ctrl_total" 'BEGIN{m=(a<b)?a:b; printf "%.6f", m/1000000}')
-"$MACS_CMD" bdgcmp -t "$treat_bdg" -c "$ctrl_bdg" -m ppois -S "$sval" --outdir "$STEP_TMP" --o-prefix "$LIB_ID"
-bdg_to_bigwig "$STEP_TMP/${LIB_ID}_ppois.bdg" "$SIG_OUT/$LIB_ID.pval_signal.bigWig"
-rm -f "$STEP_TMP/${LIB_ID}_ppois.bdg" "$treat_bdg" "$ctrl_bdg"
+"$MACS_CMD" bdgcmp -t "$treat_bdg" -c "$ctrl_bdg" -m ppois -S "$sval" --outdir "$STEP_TMP" --o-prefix "$ID"
+bdg_to_bigwig "$STEP_TMP/${ID}_ppois.bdg" "$SIG_OUT/$ID.pval_signal.bigWig"
+rm -f "$STEP_TMP/${ID}_ppois.bdg" "$treat_bdg" "$ctrl_bdg"
 
 # ---- fingerprint ----------------------------------------------------------------
 if is_true "$RUN_FINGERPRINT" && [[ -n $CTRL_BAM ]]; then
-    FP_OUT=$OUTDIR/deeptools/plotFingerprint
     mkdir -p "$FP_OUT"
     if [[ $PAIRED == 1 ]]; then
         extend=(--extendReads)
@@ -92,15 +132,15 @@ if is_true "$RUN_FINGERPRINT" && [[ -n $CTRL_BAM ]]; then
         extend=(--extendReads "${FRAGLEN:-$DEFAULT_FRAGLEN}")
     fi
     log "plotFingerprint"
-    plotFingerprint -b "$IP_BAM" "$CTRL_BAM" --labels "$LIB_ID" "$CTRL_ID" \
-        --plotFile "$FP_OUT/$LIB_ID.plotFingerprint.pdf" \
-        --outRawCounts "$FP_OUT/$LIB_ID.plotFingerprint.raw.txt" \
-        --outQualityMetrics "$FP_OUT/$LIB_ID.plotFingerprint.qcmetrics.txt" \
+    plotFingerprint -b "$IP_BAM" "$CTRL_BAM" --labels "$ID" "$CTRL_LABEL" \
+        --plotFile "$FP_OUT/$ID.plotFingerprint.pdf" \
+        --outRawCounts "$FP_OUT/$ID.plotFingerprint.raw.txt" \
+        --outQualityMetrics "$FP_OUT/$ID.plotFingerprint.qcmetrics.txt" \
         --skipZeros --numberOfSamples "$FINGERPRINT_SAMPLES" "${extend[@]}" --numberOfProcessors "$CPUS"
 fi
 
-write_metrics "$METRICS_DIR/libraries/$LIB_ID/3_peaks.tsv" \
-    control "$CTRL_ID" \
+write_metrics "$METRICS_FILE" \
+    control "$CTRL_LABEL" \
     peak_type "$PEAK_TYPE" \
     peaks "$n_peaks" \
     FRiP "$frip" \
