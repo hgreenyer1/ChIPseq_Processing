@@ -95,6 +95,9 @@ lib_bam()      { echo "$OUTDIR/bowtie2/merged_library/$1.filt.dedup.bam"; }
 lib_fraglen()  { local f="$OUTDIR/phantompeakqualtools/$1.fraglen.txt"; [[ -s $f ]] && cat "$f" || echo ""; }
 relaxed_peaks() { echo "$OUTDIR/macs2/relaxed/$1/$1.relaxed.narrowPeak"; }
 main_peaks()   { echo "$OUTDIR/macs2/$2/$1_peaks.bfilt.$2Peak"; }   # <lib> <narrow|broad>
+# merged replicates (per sample)
+merged_bam()     { echo "$OUTDIR/bowtie2/merged_replicate/$1.mRp.bam"; }
+merged_fraglen() { local f="$OUTDIR/bowtie2/merged_replicate/qc/$1.fraglen.txt"; [[ -s $f ]] && cat "$f" || echo ""; }
 
 # ---------------------------------------------------------------------------
 # MACS2

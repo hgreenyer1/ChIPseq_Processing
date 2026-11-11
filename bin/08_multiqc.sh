@@ -10,27 +10,34 @@ QC=$OUTDIR/qc
 MQC_CUSTOM=$STEP_TMP/custom_content
 mkdir -p "$QC" "$MQC_CUSTOM"
 
-# ---- library table: one row per library, one column per metric ---------------
-lib_table=$QC/library_qc_summary.tsv
-shopt -s nullglob
-lib_dirs=("$METRICS_DIR"/libraries/*/)
-if (( ${#lib_dirs[@]} > 0 )); then
-    for d in "${lib_dirs[@]}"; do
-        lib=$(basename "$d")
-        for f in "$d"/*.tsv; do awk -v l="$lib" 'BEGIN{OFS="\t"} {print l,$1,$2}' "$f"; done
-    done | awk -F'\t' '
+# metrics_table <metrics subdir> <first column name> <out.tsv>
+# One row per id (sub-directory), one column per metric key.
+metrics_table() {
+    local dirs=("$METRICS_DIR/$1"/*/) d id f
+    (( ${#dirs[@]} > 0 )) || return 1
+    for d in "${dirs[@]}"; do
+        id=$(basename "$d")
+        for f in "$d"/*.tsv; do awk -v l="$id" 'BEGIN{OFS="\t"} {print l,$1,$2}' "$f"; done
+    done | awk -F'\t' -v first="$2" '
         !($2 in seen_k) { seen_k[$2]=1; keys[++nk]=$2 }
-        !($1 in seen_l) { seen_l[$1]=1; libs[++nl]=$1 }
+        !($1 in seen_l) { seen_l[$1]=1; ids[++nl]=$1 }
         { v[$1 SUBSEP $2]=$3 }
         END {
-            printf "library"; for (k=1;k<=nk;k++) printf "\t%s", keys[k]; print ""
+            printf "%s", first; for (k=1;k<=nk;k++) printf "\t%s", keys[k]; print ""
             for (l=1;l<=nl;l++) {
-                printf "%s", libs[l]
-                for (k=1;k<=nk;k++) printf "\t%s", ((libs[l] SUBSEP keys[k]) in v) ? v[libs[l] SUBSEP keys[k]] : "NA"
+                printf "%s", ids[l]
+                for (k=1;k<=nk;k++) printf "\t%s", ((ids[l] SUBSEP keys[k]) in v) ? v[ids[l] SUBSEP keys[k]] : "NA"
                 print ""
             }
-        }' > "$lib_table"
-    log "Wrote $lib_table"
+        }' > "$3"
+    log "Wrote $3"
+}
+
+shopt -s nullglob
+
+# ---- library table -------------------------------------------------------------
+lib_table=$QC/library_qc_summary.tsv
+if metrics_table libraries library "$lib_table"; then
     {
         echo "# id: 'chipseq_library_qc'"
         echo "# section_name: 'ChIP-seq library QC (ENCODE metrics)'"
@@ -38,6 +45,18 @@ if (( ${#lib_dirs[@]} > 0 )); then
         echo "# plot_type: 'table'"
         cat "$lib_table"
     } > "$MQC_CUSTOM/chipseq_library_qc_mqc.tsv"
+fi
+
+# ---- merged replicate table --------------------------------------------------------
+merged_table=$QC/merged_replicate_qc_summary.tsv
+if metrics_table merged sample "$merged_table"; then
+    {
+        echo "# id: 'chipseq_merged_replicate_qc'"
+        echo "# section_name: 'Merged replicates'"
+        echo "# description: 'Pooled replicate BAMs: reads, fragment length (mean of replicates) and, for IP samples, peaks and FRiP on the merged data.'"
+        echo "# plot_type: 'table'"
+        cat "$merged_table"
+    } > "$MQC_CUSTOM/chipseq_merged_replicate_qc_mqc.tsv"
 fi
 
 # ---- reproducibility table -----------------------------------------------------

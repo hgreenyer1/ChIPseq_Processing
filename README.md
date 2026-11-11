@@ -29,6 +29,11 @@ Defaults are set for the UVM VACC
                      IDR (narrow) / overlap    merged peak set +
                      (broad), pseudoreplicates, featureCounts matrix
                      conservative & optimal sets
+
+ per sample with     merge ──► mpeaks (IP samples only)
+ >= 2 replicates     pooled replicate BAM      peaks, FRiP, signal tracks and
+ (IP and input)      + bigWig                  fingerprint on the merged IP
+                                               vs the merged input
                                  │
  once                multiqc (runs after all other jobs, even failed ones)
 ```
@@ -40,6 +45,8 @@ Defaults are set for the UVM VACC
 | filter | `bin/03_filter.sh` | Merges the runs of a library. ENCODE filtering: `-F 1804` (plus `-f 2` and `fixmate` for PE), MAPQ ≥ 30, Picard MarkDuplicates, library complexity (NRF, PBC1, PBC2), duplicate removal. Writes flagstat, idxstats and samtools stats. |
 | bamqc | `bin/04_bam_qc.sh` | phantompeakqualtools on 15M subsampled reads (NSC, RSC, fragment length); CPM-normalised bigWig |
 | peaks | `bin/05_call_peaks.sh` | Main MACS call: narrow uses q < 0.05, broad uses `--broad-cutoff 0.1`, as in nf-core. Blacklist filter, FRiP. Relaxed ENCODE call (p < 0.01, top 500k peaks). Fold-enrichment and −log10(p) signal bigWigs. deepTools fingerprint. |
+| merge | `bin/09_merge_replicates.sh` | For each sample (IP or input) with ≥ 2 replicates: pools the filtered replicate BAMs, writes flagstat, idxstats and stats, and makes a CPM bigWig. Duplicates are not removed a second time, because reads from different libraries are not PCR duplicates of each other (ENCODE pooling). |
+| mpeaks | `bin/05_call_peaks.sh … replicate` | Same peak calling as `peaks`, run on the merged IP sample against its merged input. |
 | repro | `bin/06_reproducibility.sh` | ENCODE reproducibility: true replicates, pooled pseudoreplicates and self-pseudoreplicates. Comparisons use IDR (narrow) or naive overlap (broad). Gives conservative and optimal peak sets, the rescue and self-consistency ratios, and a pass/borderline/fail flag. |
 | consensus | `bin/07_consensus.sh` | Merged peak set across all libraries of an antibody, a presence/absence matrix, and featureCounts read counts for differential binding |
 | multiqc | `bin/08_multiqc.sh` | Summary tables of every metric, plus the MultiQC report |
@@ -48,6 +55,24 @@ Paired-end libraries are peak-called as `BAMPE`. For single-end libraries the
 reads are shifted by the SPP fragment length estimate
 (`--nomodel --extsize <fraglen>`, as ENCODE does), falling back to
 `DEFAULT_FRAGLEN`.
+
+### Merged replicates
+
+When `MERGE_REPLICATES="true"` (the default), each sample with two or more
+replicates also gets merged-replicate output files, like nf-core's
+`merged_replicate` output. This covers IP and input samples. The merged
+files are a pooled alignment, a bigWig and, for IP samples, peak calls.
+Samples with a single replicate are skipped, because their merged files would
+be identical to the library files.
+
+The merged IP is peak-called against:
+- the merged input sample, when the IP replicates' controls are exactly that
+  input's replicates (the usual case);
+- that one control library, when every replicate uses the same one;
+- otherwise, a pool of the control libraries the replicates use.
+
+For single-end data, the merged fragment length is the mean of the replicates'
+SPP estimates.
 
 ## Setup (once)
 
@@ -169,12 +194,16 @@ results/
 ├── trimgalore/                        trimming reports (+ fastqc/ of trimmed reads)
 ├── bowtie2/
 │   ├── logs/                          bowtie2 alignment summaries per run
-│   └── merged_library/
-│       ├── <lib>.filt.dedup.bam(.bai) final filtered, de-duplicated BAMs
-│       └── qc/                        flagstat, idxstats, stats, Picard metrics, <lib>.pbc.qc
+│   ├── merged_library/
+│   │   ├── <lib>.filt.dedup.bam(.bai) final filtered, de-duplicated BAMs
+│   │   └── qc/                        flagstat, idxstats, stats, Picard metrics, <lib>.pbc.qc
+│   └── merged_replicate/
+│       ├── <sample>.mRp.bam(.bai)     replicates of a sample pooled
+│       └── qc/                        flagstat, idxstats, stats, fraglen
 ├── phantompeakqualtools/              <lib>.spp.out (NSC/RSC), cross-correlation plots, fraglen
 ├── bigwig/                            <lib>.CPM.bigWig coverage tracks
-├── deeptools/plotFingerprint/
+│   └── merged_replicate/              <sample>.CPM.bigWig
+├── deeptools/plotFingerprint/         (+ merged_replicate/)
 ├── macs2/
 │   ├── narrow/ | broad/
 │   │   ├── <lib>_peaks.narrowPeak / .broadPeak         raw MACS output
@@ -183,7 +212,11 @@ results/
 │   │   └── consensus/<antibody>/      consensus peaks (.bed, .saf, .boolean.tsv)
 │   │                                  and featureCounts matrix
 │   ├── relaxed/<lib>/                 relaxed (p < 0.01) peaks used for IDR
-│   └── signal/                        <lib>.fc_signal.bigWig, <lib>.pval_signal.bigWig
+│   ├── signal/                        <lib>.fc_signal.bigWig, <lib>.pval_signal.bigWig
+│   └── merged_replicate/              the same layout for merged samples:
+│       ├── narrow/ | broad/           <sample>_peaks(.bfilt).narrowPeak / .broadPeak, qc/ FRiP
+│       ├── relaxed/<sample>/
+│       └── signal/                    <sample>.fc_signal.bigWig, <sample>.pval_signal.bigWig
 ├── reproducibility/<sample>/
 │   ├── <sample>.optimal.<idr|overlap>.narrowPeak        recommended final peak set
 │   ├── <sample>.conservative.<idr|overlap>.narrowPeak
@@ -192,6 +225,7 @@ results/
 │   └── comparisons/                   every IDR/overlap comparison (+ IDR plots)
 ├── qc/
 │   ├── library_qc_summary.tsv         one row per library, all metrics
+│   ├── merged_replicate_qc_summary.tsv one row per merged sample
 │   └── reproducibility_summary.tsv    one row per sample
 ├── multiqc/multiqc_report.html
 ├── logs/<step>/                       SLURM logs
@@ -206,6 +240,14 @@ results/
 per-replicate `macs2/broad/*.bfilt.broadPeak`. For differential binding
 between conditions, use the featureCounts matrix in `macs2/<type>/consensus/`
 (for example with DESeq2 or DiffBind).
+
+The merged-replicate files are mainly for viewing and summarising a
+condition. Use `bigwig/merged_replicate/` and `macs2/merged_replicate/signal/`
+for genome browser tracks, heatmaps and profile plots. Use
+`macs2/merged_replicate/<type>/` for a single, high-sensitivity peak set per
+sample. These peaks come from more reads, but they are not checked for
+reproducibility between replicates. For a stringent peak set, prefer the
+`reproducibility/` peaks.
 
 ## QC guide (ENCODE)
 
@@ -238,6 +280,7 @@ Every option is documented in `conf/chipseq.config`. The most useful ones:
 | `MAPQ_THRESHOLD` | 30 | |
 | `KEEP_DUPLICATES` | `false` | |
 | `FILTER_CHRS` | `""` | e.g. `"chrM"` |
+| `MERGE_REPLICATES` | `true` | Merged-replicate BAMs, bigWigs and peaks |
 | `RUN_SPP`, `RUN_FINGERPRINT`, `RUN_REPRODUCIBILITY`, `RUN_CONSENSUS` | `true` | Turn optional steps off |
 | `CLEAN_INTERMEDIATES` | `true` | Delete trimmed FASTQs and per-run BAMs once merged |
 

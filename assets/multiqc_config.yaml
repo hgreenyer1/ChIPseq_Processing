@@ -39,9 +39,11 @@ module_order:
 custom_content:
   order:
     - chipseq_library_qc
+    - chipseq_merged_replicate_qc
     - chipseq_reproducibility
 
 extra_fn_clean_exts:
+  - ".mRp"
   - ".filt.dedup"
   - ".filt"
   - ".merged"
