@@ -110,11 +110,65 @@ macs_input_args() {
     local paired=$1 fraglen=$2
     if [[ $paired == 1 ]]; then
         echo "-f BAMPE"
-    elif [[ $fraglen =~ ^[0-9]+$ ]] && (( fraglen >= MIN_FRAGLEN )); then
+    elif [[ $fraglen =~ ^[0-9]+$ ]] && (( fraglen >= MIN_FRAGLEN && fraglen <= ${MAX_FRAGLEN:-500} )); then
         echo "-f BAM --nomodel --shift 0 --extsize $fraglen"
     else
         echo "-f BAM --nomodel --shift 0 --extsize $DEFAULT_FRAGLEN"
     fi
+}
+
+# bam_is_paired <bam>: true if the BAM contains paired-end reads (stops at the first one)
+bam_is_paired() {
+    local n
+    n=$({ samtools view -f 1 "$1" 2> /dev/null || true; } | head -n 1 | wc -l)
+    (( n > 0 ))
+}
+
+# read1_bam <bam>: read-1-only copy of a paired-end BAM in STEP_TMP (cached), echoes its path
+read1_bam() {
+    local out
+    out=$STEP_TMP/$(basename "$1" .bam).read1.bam
+    if [[ ! -s $out ]]; then
+        samtools view -@ "$CPUS" -b -f 64 -o "$out" "$1"
+        samtools index "$out"
+    fi
+    echo "$out"
+}
+
+# mean_insert_size <paired bam>: mean fragment length of the first 200k proper pairs
+mean_insert_size() {
+    { samtools view -f 66 "$1" 2> /dev/null || true; } | head -n 200000 \
+        | awk '{t = ($9 < 0) ? -$9 : $9; if (t > 0) {s += t; n++}} END {if (n) printf "%d", s / n}'
+}
+
+# macs_inputs <treat_bam> <ctrl_bam|""> <paired 0|1> <fraglen>
+# Sets MACS_TREAT, MACS_CTRL and MACS_FMT (array of format/model args).
+# MACS reads treatment and control in a single format, and reading a
+# single-end BAM as BAMPE turns every read into a 0 bp fragment (no peaks at
+# all). So when exactly one side is paired-end, both are used as single reads:
+# the paired-end BAM is reduced to read 1 (one read per fragment) and reads are
+# extended by the fragment length.
+macs_inputs() {
+    local treat=$1 ctrl=$2 paired=$3 fraglen=$4 ctrl_paired=$3
+    MACS_TREAT=$treat
+    MACS_CTRL=$ctrl
+    if [[ -n $ctrl ]]; then
+        if bam_is_paired "$ctrl"; then ctrl_paired=1; else ctrl_paired=0; fi
+    fi
+    if [[ $paired != "$ctrl_paired" ]]; then
+        if [[ $paired == 1 ]]; then
+            # the real fragment length is known from the pairs (more reliable
+            # than the cross-correlation estimate, especially for broad marks)
+            fraglen=$(mean_insert_size "$treat")
+            log "Treatment is paired-end but control is single-end: using read 1 of the treatment, extended to the mean insert size (${fraglen:-unknown} bp)"
+            MACS_TREAT=$(read1_bam "$treat")
+        else
+            log "Treatment is single-end but control is paired-end: using read 1 of the control"
+            MACS_CTRL=$(read1_bam "$ctrl")
+        fi
+        paired=0
+    fi
+    read -ra MACS_FMT <<< "$(macs_input_args "$paired" "$fraglen")"
 }
 
 # call_relaxed_peaks <treat_bam> <ctrl_bam|""> <name> <outdir> <paired> <fraglen> [bdg]
@@ -124,11 +178,12 @@ macs_input_args() {
 call_relaxed_peaks() {
     local treat=$1 ctrl=$2 name=$3 outdir=$4 paired=$5 fraglen=$6 bdg=${7:-}
     local ctrl_args=() bdg_args=()
-    [[ -n $ctrl ]] && ctrl_args=(-c "$ctrl")
+    macs_inputs "$treat" "$ctrl" "$paired" "$fraglen"
+    [[ -n $MACS_CTRL ]] && ctrl_args=(-c "$MACS_CTRL")
     [[ $bdg == "bdg" ]] && bdg_args=(-B --SPMR)
     mkdir -p "$outdir"
-    # shellcheck disable=SC2046,SC2086
-    "$MACS_CMD" callpeak -t "$treat" "${ctrl_args[@]}" $(macs_input_args "$paired" "$fraglen") \
+    # shellcheck disable=SC2086
+    "$MACS_CMD" callpeak -t "$MACS_TREAT" "${ctrl_args[@]}" "${MACS_FMT[@]}" \
         -g "$MACS_GSIZE" -n "$name" --outdir "$outdir" --tempdir "$STEP_TMP" \
         -p "$RELAXED_PVAL" --keep-dup all --call-summits "${bdg_args[@]}" $MACS_EXTRA_ARGS
     sort -k8,8gr -S "$(job_mem_75)" -T "$STEP_TMP" "$outdir/${name}_peaks.narrowPeak" \

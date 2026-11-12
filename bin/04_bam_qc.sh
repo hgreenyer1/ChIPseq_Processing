@@ -37,10 +37,10 @@ if is_true "$RUN_SPP"; then
         fraglen=$(cut -f3 "$SPP_OUT/$LIB_ID.spp.out" | cut -d, -f1)
         nsc=$(cut -f9 "$SPP_OUT/$LIB_ID.spp.out")
         rsc=$(cut -f10 "$SPP_OUT/$LIB_ID.spp.out")
-        if [[ $fraglen =~ ^[0-9]+$ ]] && (( fraglen >= MIN_FRAGLEN )); then
+        if [[ $fraglen =~ ^[0-9]+$ ]] && (( fraglen >= MIN_FRAGLEN && fraglen <= ${MAX_FRAGLEN:-500} )); then
             echo "$fraglen" > "$SPP_OUT/$LIB_ID.fraglen.txt"
         else
-            warn "SPP fragment length '$fraglen' < MIN_FRAGLEN, it will not be used"
+            warn "SPP fragment length '$fraglen' is outside ${MIN_FRAGLEN}-${MAX_FRAGLEN:-500} bp, it will not be used"
         fi
     else
         warn "run_spp.R failed for $LIB_ID (often low depth); continuing without NSC/RSC"
