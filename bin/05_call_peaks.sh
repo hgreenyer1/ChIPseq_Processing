@@ -61,14 +61,13 @@ case $CTRL_SPEC in
         CTRL_BAM=$(lib_bam "$CTRL_SPEC")
         ;;
 esac
-ctrl_args=()
-if [[ -n $CTRL_BAM ]]; then
-    [[ -s $CTRL_BAM ]] || die "missing control BAM $CTRL_BAM"
-    ctrl_args=(-c "$CTRL_BAM")
-fi
+[[ -z $CTRL_BAM || -s $CTRL_BAM ]] || die "missing control BAM $CTRL_BAM"
 
-MACS_IN=$(macs_input_args "$PAIRED" "$FRAGLEN")
-log "MACS2 input: $MACS_IN, control: $CTRL_LABEL"
+# MACS inputs (handles an IP and control of different read types)
+macs_inputs "$IP_BAM" "$CTRL_BAM" "$PAIRED" "$FRAGLEN"
+ctrl_args=()
+[[ -n $MACS_CTRL ]] && ctrl_args=(-c "$MACS_CTRL")
+log "MACS2 input: ${MACS_FMT[*]}, control: $CTRL_LABEL"
 
 # ---- main peak call ------------------------------------------------------------
 MAIN_OUT=$BASE/$PEAK_TYPE
@@ -80,7 +79,7 @@ else
 fi
 log "MACS2 main ${PEAK_TYPE} peak call"
 # shellcheck disable=SC2086
-"$MACS_CMD" callpeak -t "$IP_BAM" "${ctrl_args[@]}" $MACS_IN -g "$MACS_GSIZE" \
+"$MACS_CMD" callpeak -t "$MACS_TREAT" "${ctrl_args[@]}" "${MACS_FMT[@]}" -g "$MACS_GSIZE" \
     -n "$ID" --outdir "$MAIN_OUT" --tempdir "$STEP_TMP" --keep-dup all \
     "${type_args[@]}" $MACS_EXTRA_ARGS
 raw_peaks=$MAIN_OUT/${ID}_peaks.${PEAK_TYPE}Peak
@@ -106,6 +105,9 @@ REL_OUT=$BASE/relaxed/$ID
 log "MACS2 relaxed call (p < $RELAXED_PVAL)"
 call_relaxed_peaks "$IP_BAM" "$CTRL_BAM" "$ID" "$REL_OUT" "$PAIRED" "$FRAGLEN" bdg
 n_relaxed=$(wc -l < "$REL_OUT/$ID.relaxed.narrowPeak")
+# p < 0.01 always gives many peaks on real data; none means broken input
+(( n_relaxed > 0 )) || die "MACS called no peaks even at p < $RELAXED_PVAL for $ID vs $CTRL_LABEL. \
+Check that the IP and control are the right files (see the MACS read counts above)."
 
 SIG_OUT=$BASE/signal
 mkdir -p "$SIG_OUT"
@@ -116,9 +118,12 @@ log "Fold-enrichment and p-value signal tracks"
 bdg_to_bigwig "$STEP_TMP/${ID}_FE.bdg" "$SIG_OUT/$ID.fc_signal.bigWig"
 rm -f "$STEP_TMP/${ID}_FE.bdg"
 # ENCODE: scale the p-value track by the smaller library (in millions of reads)
-ctrl_total=$total
-[[ -n $CTRL_BAM ]] && ctrl_total=$(samtools view -c -F 4 "$CTRL_BAM")
-sval=$(awk -v a="$total" -v b="$ctrl_total" 'BEGIN{m=(a<b)?a:b; printf "%.6f", m/1000000}')
+# (counted on the reads MACS used, i.e. read 1 only when read types are mixed)
+treat_total=$total
+[[ $MACS_TREAT != "$IP_BAM" ]] && treat_total=$(samtools view -c -F 4 "$MACS_TREAT")
+ctrl_total=$treat_total
+[[ -n $MACS_CTRL ]] && ctrl_total=$(samtools view -c -F 4 "$MACS_CTRL")
+sval=$(awk -v a="$treat_total" -v b="$ctrl_total" 'BEGIN{m=(a<b)?a:b; printf "%.6f", m/1000000}')
 "$MACS_CMD" bdgcmp -t "$treat_bdg" -c "$ctrl_bdg" -m ppois -S "$sval" --outdir "$STEP_TMP" --o-prefix "$ID"
 bdg_to_bigwig "$STEP_TMP/${ID}_ppois.bdg" "$SIG_OUT/$ID.pval_signal.bigWig"
 rm -f "$STEP_TMP/${ID}_ppois.bdg" "$treat_bdg" "$ctrl_bdg"
@@ -126,11 +131,8 @@ rm -f "$STEP_TMP/${ID}_ppois.bdg" "$treat_bdg" "$ctrl_bdg"
 # ---- fingerprint ----------------------------------------------------------------
 if is_true "$RUN_FINGERPRINT" && [[ -n $CTRL_BAM ]]; then
     mkdir -p "$FP_OUT"
-    if [[ $PAIRED == 1 ]]; then
-        extend=(--extendReads)
-    else
-        extend=(--extendReads "${FRAGLEN:-$DEFAULT_FRAGLEN}")
-    fi
+    # mates define the fragment for paired reads; single reads get this length
+    extend=(--extendReads "${FRAGLEN:-$DEFAULT_FRAGLEN}")
     log "plotFingerprint"
     plotFingerprint -b "$IP_BAM" "$CTRL_BAM" --labels "$ID" "$CTRL_LABEL" \
         --plotFile "$FP_OUT/$ID.plotFingerprint.pdf" \

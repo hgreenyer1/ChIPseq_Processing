@@ -56,6 +56,13 @@ reads are shifted by the SPP fragment length estimate
 (`--nomodel --extsize <fraglen>`, as ENCODE does), falling back to
 `DEFAULT_FRAGLEN`.
 
+An IP and its control can have different read types, for example a
+paired-end IP with a single-end input. MACS reads both files in one format,
+so in that case both are used as single reads. The paired-end file is
+reduced to read 1, so each fragment counts once. Reads are then extended by
+the paired-end library's mean insert size. Expect slightly lower
+sensitivity than with an input of the same read type.
+
 ### Merged replicates
 
 When `MERGE_REPLICATES="true"` (the default), each sample with two or more

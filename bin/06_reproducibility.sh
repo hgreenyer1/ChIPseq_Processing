@@ -96,7 +96,7 @@ declare -a self_n
 for i in "${!reps[@]}"; do
     lib=${reps[$i]}
     rel=$(relaxed_peaks "$lib")
-    [[ -s $rel ]] || die "missing relaxed peaks $rel"
+    [[ -s $rel ]] || die "relaxed peaks missing or empty: $rel (see the peaks log of $lib)"
     log "Self pseudoreplicates of $lib"
     split_bam "$(lib_bam "$lib")" "$STEP_TMP/$lib.pr1.bam" "$STEP_TMP/$lib.pr2.bam"
     fl=$(lib_fraglen "$lib")
